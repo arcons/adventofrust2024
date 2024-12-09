@@ -1,162 +1,97 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Default, Clone)]
-struct DependencyNode {
-    direct_descendants: HashSet<String>,
-    all_descendants: HashSet<String>,
+#[derive(Debug)]
+struct PrintQueue {
+    ordering_rules: HashMap<i32, HashSet<i32>>,
 }
 
-struct DependencyHierarchy {
-    nodes: HashMap<String, DependencyNode>,
-}
-
-impl DependencyHierarchy {
-    fn new(input: &str) -> Self {
-        let mut hierarchy = DependencyHierarchy {
-            nodes: HashMap::new(),
-        };
-
-        // First pass: collect direct dependencies
-        for line in input.trim().lines() {
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() == 2 {
-                let parent = parts[0].to_string();
-                let child = parts[1].to_string();
-
-                hierarchy.nodes
-                    .entry(parent.clone())
-                    .or_default()
-                    .direct_descendants
-                    .insert(child.clone());
-
-                // Ensure both parent and child exist in the map
-                hierarchy.nodes.entry(child).or_default();
-            }
+impl PrintQueue {
+    fn new() -> Self {
+        PrintQueue {
+            ordering_rules: HashMap::new(),
         }
-
-        // Compute all descendants using an iterative approach
-        hierarchy.compute_all_descendants();
-
-        hierarchy
     }
 
-    fn compute_all_descendants(&mut self) {
-        // Compute in-degree (number of parents) for each node
-        let mut in_degree: HashMap<String, usize> = HashMap::new();
-        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+    fn add_rule(&mut self, before: i32, after: i32) {
+        self.ordering_rules
+            .entry(before)
+            .or_insert_with(HashSet::new)
+            .insert(after);
+    }
 
-        // Build graph and compute in-degree
-        for (parent, node) in &self.nodes {
-            for child in &node.direct_descendants {
-                in_degree.entry(child.clone()).or_default();
-                *in_degree.entry(child.clone()).or_default() += 1;
-                graph.entry(parent.clone()).or_default().push(child.clone());
-            }
-        }
-
-        // Nodes with zero in-degree can start the process
-        let mut queue: VecDeque<String> = self.nodes
-            .keys()
-            .filter(|node| in_degree.get(*node).cloned().unwrap_or(0) == 0)
-            .cloned()
-            .collect();
-
-        // Track all descendants for each node
-        let mut all_descendants: HashMap<String, HashSet<String>> = HashMap::new();
-
-        while let Some(current) = queue.pop_front() {
-            // Compute descendants for current node
-            let mut current_descendants = self.nodes
-                .get(&current)
-                .map(|n| n.direct_descendants.clone())
-                .unwrap_or_default();
-
-            // Add descendants of direct descendants
-            for direct_child in &self.nodes.get(&current).unwrap_or(&DependencyNode::default()).direct_descendants {
-                if let Some(child_descendants) = all_descendants.get(direct_child) {
-                    current_descendants.extend(child_descendants.iter().cloned());
+    fn is_valid_order(&self, update: &[i32]) -> bool {
+        for (i, &current) in update.iter().enumerate() {
+            for (j, &later) in update.iter().enumerate().skip(i + 1) {
+                // Check if we have a rule that current must be before later
+                if let Some(after_pages) = self.ordering_rules.get(&current) {
+                    if after_pages.contains(&later) {
+                        continue;
+                    }
                 }
-            }
 
-            // Store computed descendants
-            all_descendants.insert(current.clone(), current_descendants.clone());
-
-            // Update all descendants in the main nodes map
-            if let Some(node) = self.nodes.get_mut(&current) {
-                node.all_descendants = current_descendants;
-            }
-
-            // Process neighbors
-            if let Some(neighbors) = graph.get(&current) {
-                for neighbor in neighbors {
-                    // Decrement in-degree
-                    if let Some(degree) = in_degree.get_mut(neighbor) {
-                        *degree -= 1;
-                        
-                        // If in-degree becomes zero, add to queue
-                        if *degree == 0 {
-                            queue.push_back(neighbor.clone());
-                        }
+                // Check if we have a rule that later must be after current
+                if let Some(after_pages) = self.ordering_rules.get(&later) {
+                    if after_pages.contains(&current) {
+                        // Invalid order
+                        return false;
                     }
                 }
             }
         }
+        true
     }
 
-    fn is_descendant(&self, node: &str, target: &str) -> bool {
-        self.nodes
-            .get(node)
-            .map_or(false, |dep_node| 
-                dep_node.all_descendants.contains(target)
-            )
-    }
-}
+    fn solve(&self, updates: &[Vec<i32>]) -> i32 {
+        let mut middle_page_sum = 0;
 
-fn validate_dependency_chain(input: &str, dependency_input: &str) -> (Vec<bool>, Vec<String>) {
-    let hierarchy = DependencyHierarchy::new(dependency_input);
-    
-    let results: Vec<bool> = input.lines().map(|line| {
-        let nums: Vec<String> = line.split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+        for update in updates {
+            if self.is_valid_order(update) {
+                // Find middle page (for odd-length updates)
+                let middle_index = update.len() / 2;
+                middle_page_sum += update[middle_index];
+            }
+        }
 
-        nums.windows(2).all(|window| {
-            let (current, next) = (&window[0], &window[1]);
-            hierarchy.is_descendant(current, next)
-        })
-    }).collect();
-    
-    // Extract true cases
-    let true_cases: Vec<String> = input.lines()
-        .zip(&results)
-        .filter_map(|(line, &is_true)| {
-            if is_true { Some(line.to_string()) } else { None }
-        })
-        .collect();
-    
-    // Compute sum of middle values
-    let mut sum = 0;
-    for s in &true_cases {
-        let numbers: Vec<u32> = s
-            .split(',')
-            .map(|num_str| num_str.parse::<u32>().unwrap())
-            .collect();
-        let middle_index = numbers.len() / 2;
-        sum += numbers[middle_index];
+        middle_page_sum
     }
 
-    println!("True Cases:");
-    for case in &true_cases {
-        println!("{}", case);
+    fn parse_input(input: &str) -> (Self, Vec<Vec<i32>>) {
+        let mut print_queue = PrintQueue::new();
+        let mut updates = Vec::new();
+        let mut parsing_rules = true;
+
+        for line in input.lines() {
+            // Skip empty lines
+            let line = line.trim();
+            if line.is_empty() {
+                parsing_rules = false;
+                continue;
+            }
+
+            if parsing_rules {
+                // Parse ordering rules
+                if let Some((before, after)) = line.split_once('|') {
+                    let before: i32 = before.parse().expect("Invalid page number");
+                    let after: i32 = after.parse().expect("Invalid page number");
+                    print_queue.add_rule(before, after);
+                }
+            } else {
+                // Parse update sequences
+                let update: Vec<i32> = line
+                    .split(',')
+                    .map(|s| s.parse().expect("Invalid page number"))
+                    .collect();
+                updates.push(update);
+            }
+        }
+
+        (print_queue, updates)
     }
-    
-    println!("\nMiddle Value Sum: {}", sum);
-    
-    (results, true_cases)
 }
 
 fn main() {
-    let dependency_input = r#"91|88
+    // Example input as a string
+    let input = "91|88
 92|39
 92|57
 32|64
@@ -1332,9 +1267,8 @@ fn main() {
 59|79
 59|95
 83|34
-"#;
 
-    let input = "33,27,67,97,92,32,93
+33,27,67,97,92,32,93
 26,11,53,72,61,92,17,77,37
 63,95,74,83,33,79,56,28,89
 89,26,32,39,61,71,19
@@ -1535,12 +1469,69 @@ fn main() {
 41,93,26,42,39,35,97
 18,64,74,88,96,59,81,38,95,83,77
 56,28,27,67,89,97,41,42,92,55,37,98,39,35,17,61,93,78,71,94,72
-98,39,55,19,78,67,27,96,72,37,66";
+98,39,55,19,78,67,27,96,72,37,66
+";
 
-    let (results, _) = validate_dependency_chain(input, dependency_input);
-    
-    println!("\nValidation Results:");
-    for (i, result) in results.iter().enumerate() {
-        println!("Line {}: {}", i + 1, result);
+    // Parse input from string
+    let (print_queue, updates) = PrintQueue::parse_input(input);
+
+    // Solve the problem
+    let result = print_queue.solve(&updates);
+    println!("Sum of middle pages from correctly ordered updates: {}", result);
+}
+
+// Unit tests to validate the solution
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example_input() {
+        // Recreate the example from the problem description
+        let input = "47|53
+97|13
+97|61
+97|47
+75|29
+61|13
+75|53
+29|13
+97|29
+53|29
+61|53
+97|53
+61|29
+47|13
+75|47
+97|75
+47|61
+75|61
+47|29
+75|13
+53|13
+
+75,47,61,53,29
+97,61,53,29,13
+75,29,13
+75,97,47,61,53
+61,13,29
+97,13,75,29,47";
+
+        let (print_queue, updates) = PrintQueue::parse_input(input);
+        let result = print_queue.solve(&updates);
+        assert_eq!(result, 143);
+    }
+
+    #[test]
+    fn test_is_valid_order() {
+        let mut print_queue = PrintQueue::new();
+        print_queue.add_rule(47, 53);
+        print_queue.add_rule(75, 29);
+
+        // Valid order
+        assert!(print_queue.is_valid_order(&[75, 47, 53, 29]));
+        
+        // Invalid order
+        assert!(!print_queue.is_valid_order(&[53, 75, 47, 29]));
     }
 }
